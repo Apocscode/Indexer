@@ -3,6 +3,8 @@ Watchmaker's Lathe Controller — RPM Sensor
 Interrupt-driven Hall effect / optical sensor for closed-loop RPM measurement.
 """
 
+from __future__ import annotations
+
 import logging
 import time
 import threading

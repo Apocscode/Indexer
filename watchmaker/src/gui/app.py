@@ -44,91 +44,80 @@ class AppController:
     # ---- Lathe controls ------------------------------------------------
     def set_speed(self, rpm: float):
         if self._rpm_mode:
-            self.pid.set_setpoint(rpm)
+            self.pid.setpoint = rpm
         else:
-            freq = self.config.rpm_to_step_freq(rpm)
-            self.motor.run_continuous(freq)
+            self.motor.set_rpm(rpm)
 
     def set_direction(self, direction: int):
-        self.motor.set_direction(direction)
+        self.motor._set_direction(direction)
 
     def set_rpm_mode(self, enabled: bool):
         self._rpm_mode = enabled
-        if not enabled:
-            self.pid.reset()
+        if enabled:
+            self.pid.enable()
+        else:
+            self.pid.disable()
 
     def start_lathe(self, rpm: float, direction: int = 1):
-        self.motor.set_direction(direction)
         if self._rpm_mode:
-            self.pid.set_setpoint(rpm)
-            self.pid.reset()
-        freq = self.config.rpm_to_step_freq(rpm)
-        self.motor.run_continuous(freq)
+            self.pid.setpoint = rpm
+            self.pid.enable()
+        self.motor.run_continuous(rpm, direction)
 
     def stop_lathe(self):
         self.motor.stop()
-        self.pid.reset()
+        self.pid.disable()
 
     def emergency_stop(self):
         self.motor.emergency_stop()
-        self.pid.reset()
+        self.pid.disable()
         logger.warning("E-STOP triggered")
 
     # ---- Index controls ------------------------------------------------
     def set_divisions(self, n: int):
-        self.indexer.set_divisions(n)
+        self.indexer.divisions = n
 
     def index_next(self):
-        result = self.indexer.next_steps()
-        if result:
-            self.motor.move_steps(
-                result.steps,
-                speed_hz=self.config.rpm_to_step_freq(
-                    self.config.speed.index_speed_rpm)
-            )
-        return result
+        steps = self.indexer.next_steps()
+        if steps:
+            index_freq = self.config.rpm_to_step_freq(
+                self.config.speed.default_rpm)
+            self.motor.move_steps_async(steps, speed_hz=min(index_freq, 50000))
+        return self.indexer
 
     def index_prev(self):
-        result = self.indexer.prev_steps()
-        if result:
-            self.motor.move_steps(
-                -result.steps,
-                speed_hz=self.config.rpm_to_step_freq(
-                    self.config.speed.index_speed_rpm)
-            )
-        return result
+        steps = self.indexer.prev_steps()
+        if steps:
+            index_freq = self.config.rpm_to_step_freq(
+                self.config.speed.default_rpm)
+            self.motor.move_steps_async(steps, speed_hz=min(index_freq, 50000))
+        return self.indexer
 
     def index_goto(self, division: int):
-        result = self.indexer.steps_to_division(division)
-        if result:
-            self.motor.move_steps(
-                result.steps,
-                speed_hz=self.config.rpm_to_step_freq(
-                    self.config.speed.index_speed_rpm)
-            )
-        return result
+        steps = self.indexer.steps_to_division(division)
+        if steps:
+            index_freq = self.config.rpm_to_step_freq(
+                self.config.speed.default_rpm)
+            self.motor.move_steps_async(steps, speed_hz=min(index_freq, 50000))
+        return self.indexer
 
     def jog_degrees(self, degrees: float):
-        steps = int(degrees / self.config.degrees_per_step)
-        self.motor.move_steps(
-            steps,
-            speed_hz=self.config.rpm_to_step_freq(
-                self.config.speed.jog_speed_rpm)
-        )
-        self.indexer.jog_steps(steps)
+        steps = self.indexer.degrees_to_steps(degrees)
+        if steps:
+            jog_freq = self.config.rpm_to_step_freq(
+                self.config.speed.default_rpm)
+            self.motor.move_steps_async(steps, speed_hz=min(jog_freq, 20000))
 
     def go_home(self):
-        result = self.indexer.steps_to_division(0)
-        if result and result.steps != 0:
-            self.motor.move_steps(
-                -self.indexer._absolute_position,
-                speed_hz=self.config.rpm_to_step_freq(
-                    self.config.speed.index_speed_rpm)
-            )
-        self.indexer.reset()
+        steps = self.indexer.steps_to_home()
+        if steps:
+            index_freq = self.config.rpm_to_step_freq(
+                self.config.speed.default_rpm)
+            self.motor.move_steps_async(steps, speed_hz=min(index_freq, 50000))
+        self.indexer.reset_home()
 
     def get_position_degrees(self) -> float:
-        return self.indexer.current_degrees
+        return self.indexer.degrees
 
     def switch_to_index(self):
         if self._app:
@@ -277,15 +266,15 @@ class App:
         # Update RPM telemetry
         if ctrl.rpm:
             actual_rpm = ctrl.rpm.rpm
-            target = 0
-            if ctrl.pid and ctrl.pid._setpoint:
-                target = ctrl.pid._setpoint
+            target = ctrl.pid.setpoint if ctrl.pid else 0
 
             # PID loop (if in RPM mode)
-            if ctrl._rpm_mode and ctrl.motor.is_running:
+            if ctrl._rpm_mode and ctrl.motor.is_moving:
                 output = ctrl.pid.update(actual_rpm)
                 if output is not None:
-                    ctrl.motor.set_frequency(output)
+                    # PID output is 0.0–1.0, scale to max frequency
+                    max_freq = ctrl.config.rpm_to_step_freq(ctrl.config.speed.max_rpm)
+                    ctrl.motor.set_rpm(ctrl.config.step_freq_to_rpm(output * max_freq))
 
             # Update lathe page gauges
             lathe = self._pages.get("Lathe")
@@ -296,12 +285,16 @@ class App:
         motor_state = "IDLE"
         state_color = self.theme["fg2"]
         if ctrl.motor:
-            if ctrl.motor.is_running:
+            from ..motor import MotorState
+            if ctrl.motor.state == MotorState.RUNNING:
                 motor_state = "RUNNING"
                 state_color = self.theme["green"]
             elif ctrl.motor.is_moving:
                 motor_state = "MOVING"
                 state_color = self.theme["yellow"]
+            elif ctrl.motor.state == MotorState.ESTOP:
+                motor_state = "E-STOP"
+                state_color = self.theme["red"]
 
         pos_deg = ctrl.get_position_degrees()
         self.status_bar.update_status(

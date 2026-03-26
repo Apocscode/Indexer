@@ -3,6 +3,8 @@ Watchmaker's Lathe Controller — Hardware Input
 Rotary encoder + physical buttons via GPIO with debouncing.
 """
 
+from __future__ import annotations
+
 import logging
 import time
 import threading

@@ -4,6 +4,8 @@ Controls TMC2209 via GPIO step/dir pulses and optional UART configuration.
 Uses pigpio for hardware-timed step pulses (jitter-free).
 """
 
+from __future__ import annotations
+
 import logging
 import time
 import threading

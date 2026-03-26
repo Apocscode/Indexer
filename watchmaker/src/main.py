@@ -87,9 +87,9 @@ def main():
     config_path = os.path.abspath(config_path)
 
     logger.info(f"Loading config: {config_path}")
-    config = Config.load(config_path)
+    config = Config(config_path)
     logger.info(f"  Steps/rev: {config.total_steps_per_rev}")
-    logger.info(f"  Gear ratio: {config.gear.spindle_teeth / config.gear.motor_teeth:.2f}:1")
+    logger.info(f"  Gear ratio: {config.gear_ratio:.2f}:1")
     logger.info(f"  Max RPM: {config.speed.max_rpm}")
 
     # ---- Initialize hardware ------------------------------------------
@@ -113,57 +113,27 @@ def main():
         logger.info("Running in DEMO mode (no hardware)")
 
     # Motor
-    motor = StepperMotor(
-        pi=pi,
-        step_pin=config.gpio.step_pin,
-        dir_pin=config.gpio.dir_pin,
-        enable_pin=config.gpio.enable_pin,
-        steps_per_rev=config.motor.steps_per_rev,
-        microsteps=config.motor.microsteps
-    )
+    motor = StepperMotor(config)
+    motor.init()
     motor.enable()
     logger.info("Motor initialized")
 
     # RPM Sensor
-    rpm_sensor = RPMSensor(
-        pi=pi,
-        gpio_pin=config.gpio.rpm_pin,
-        magnets=config.rpm_sensor.magnets,
-        filter_size=config.rpm_sensor.filter_size,
-        timeout_s=config.rpm_sensor.timeout_s
-    )
-    rpm_sensor.start()
+    rpm_sensor = RPMSensor(config)
+    rpm_sensor.init(pi)
     logger.info("RPM sensor initialized")
 
     # PID Controller
-    pid = PIDController(
-        kp=config.pid.kp,
-        ki=config.pid.ki,
-        kd=config.pid.kd,
-        output_min=config.pid.output_min,
-        output_max=config.pid.output_max,
-        sample_interval=config.pid.sample_interval
-    )
+    pid = PIDController(config)
     logger.info("PID controller initialized")
 
     # Indexer
-    indexer = Indexer(
-        total_steps_per_rev=config.total_steps_per_rev,
-        default_divisions=config.indexing.default_divisions
-    )
+    indexer = Indexer(config)
     logger.info(f"Indexer initialized: {config.indexing.default_divisions} divisions")
 
     # Hardware Input
-    hw_input = HardwareInput(
-        pi=pi,
-        enc_clk=config.gpio.enc_clk,
-        enc_dt=config.gpio.enc_dt,
-        enc_sw=config.gpio.enc_sw,
-        btn_mode=config.gpio.btn_mode,
-        btn_go=config.gpio.btn_go,
-        btn_estop=config.gpio.btn_estop
-    )
-    hw_input.start()
+    hw_input = HardwareInput(config)
+    hw_input.init(pi)
     logger.info("Hardware input initialized")
 
     # ---- Create controller & GUI --------------------------------------
@@ -210,15 +180,15 @@ def cleanup(motor, rpm_sensor, hw_input, pi):
     """Release all hardware resources."""
     logger.info("Cleaning up hardware resources")
     try:
-        motor.disable()
+        motor.shutdown()
     except Exception:
         pass
     try:
-        rpm_sensor.stop()
+        rpm_sensor.shutdown()
     except Exception:
         pass
     try:
-        hw_input.stop()
+        hw_input.shutdown()
     except Exception:
         pass
     if pi:
